@@ -1,0 +1,45 @@
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  enable:
+    - gofmt
+    - govet
+    - unused
+    - ineffassign
+    - revive
+    - misspell
+    - whitespace
+
+linters-settings:
+  gofmt:
+    # gofmt garantiza automáticamente el estilo 1TBS (llaves '{' en la misma línea)
+    simplify: true
+  revive:
+    rules:
+      - name: unused-parameter
+        severity: warning
+        disabled: false
+      - name: blank-imports
+        severity: warning
+      - name: unreachable-code
+        severity: warning
+
+severity:
+  default-severity: error
+  rules:
+    # Mostrar advertencias (warnings) en lugar de errores para variables e imports no usados
+    - linters:
+        - unused
+      severity: warning
+    - linters:
+        - ineffassign
+      severity: warning
+    - linters:
+        - revive
+      severity: warning
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

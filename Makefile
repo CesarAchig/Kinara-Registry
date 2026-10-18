@@ -1,4 +1,4 @@
-.PHONY: all help build build-server build-cli dev-server dev-ui test lint clean
+.PHONY: all help build build-server build-cli dev-server dev-ui test lint lint-go lint-ui clean
 
 # Variables
 BINARY_SERVER=bin/kinara
@@ -39,9 +39,26 @@ test: ## Ejecuta las pruebas unitarias y de integración de Go
 	@echo "🧪 Ejecutando tests..."
 	@go test -v -race ./...
 
-lint: ## Ejecuta el linter de Go (golangci-lint)
-	@echo "🔍 Analizando código con golangci-lint..."
-	@golangci-lint run ./...
+lint: lint-go lint-ui ## Ejecuta todos los linters (Go y Frontend)
+
+lint-go: ## Ejecuta el linter de Go (golangci-lint o go vet)
+	@echo "🔍 Analizando código Go con golangci-lint..."
+	@if command -v golangci-lint > /dev/null; then \
+		golangci-lint run ./...; \
+	else \
+		echo "⚠️  golangci-lint no está en el PATH del host. Ejecutando go vet..."; \
+		go vet ./...; \
+	fi
+
+lint-ui: ## Ejecuta el linter de Frontend (ESLint)
+	@echo "🔍 Analizando código Frontend con ESLint..."
+	@if command -v bun > /dev/null; then \
+		cd $(WEB_DIR) && bun run lint; \
+	elif command -v npm > /dev/null; then \
+		cd $(WEB_DIR) && npm run lint; \
+	else \
+		echo "⚠️  Bun/npm no está en el PATH del host (ejecutar dentro del Dev Container)."; \
+	fi
 
 clean: ## Limpia binarios generados y cachés de compilación
 	@echo "🧹 Limpiando binarios y temporales..."

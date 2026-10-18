@@ -46,6 +46,7 @@
         "bradlc.vscode-tailwindcss",
         "esbenp.prettier-vscode",
         "dbaeumer.vscode-eslint",
+        "ms-vscode.makefile-tools",
         "dsznajder.es7-react-js-snippets",
 
         // Base de Datos & Pruebas de API
@@ -72,8 +73,20 @@
         "go.lintTool": "golangci-lint",
         "go.lintOnSave": "package",
         "go.useLanguageServer": true,
+        "gopls": {
+          "ui.diagnostic.analyses": {
+            "unusedparams": true,
+            "unusedvariable": true
+          }
+        },
 
-        // Configuración específica para TypeScript y React
+        // Configuración específica para JavaScript, TypeScript y React
+        "[javascript]": {
+          "editor.defaultFormatter": "esbenp.prettier-vscode"
+        },
+        "[javascriptreact]": {
+          "editor.defaultFormatter": "esbenp.prettier-vscode"
+        },
         "[typescript]": {
           "editor.defaultFormatter": "esbenp.prettier-vscode"
         },
@@ -86,6 +99,12 @@
         "[jsonc]": {
           "editor.defaultFormatter": "esbenp.prettier-vscode"
         },
+        "eslint.validate": [
+          "javascript",
+          "javascriptreact",
+          "typescript",
+          "typescriptreact"
+        ],
 
         // Autocompletado de Tailwind CSS para utilidades clsx, cva y cn (shadcn/ui y Tremor)
         "tailwindCSS.includeLanguages": {
