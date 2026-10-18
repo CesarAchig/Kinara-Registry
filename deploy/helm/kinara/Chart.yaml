@@ -1,0 +1,14 @@
+apiVersion: v2
+name: kinara
+description: Universal Private Artifact Registry & Package Cache (Cloud-Native Helm Chart)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - artifact-registry
+  - oci
+  - docker
+  - pypi
+  - cargo
+  - nuget
+  - go

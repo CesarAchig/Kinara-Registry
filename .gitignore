@@ -1,0 +1,47 @@
+# Binarios y compilados de Go
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.txt
+coverage.out
+
+# Air (Live reload de Go)
+/tmp/
+build-errors.log
+
+# Frontend (Bun / Vite / React)
+/web/node_modules/
+/web/dist/
+/web/.vite/
+.bun/
+bun.lockb.bak
+
+# Variables de entorno y secretos locales
+*.env.local
+*.env.*.local
+.env.production
+
+# Archivos de base de datos local y caché
+*.sqlite
+*.sqlite3
+*.db
+*.wal
+*.shm
+
+# IDEs y editores
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log

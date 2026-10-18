@@ -1,0 +1,51 @@
+# Configuración por defecto para el despliegue de Kinara Registry en Kubernetes
+
+replicaCount: 2
+
+image:
+  repository: kinara/registry
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: true
+  className: "nginx"
+  hosts:
+    - host: registry.empresa.internal
+      paths:
+        - path: /
+          pathType: Prefix
+
+# Configuración de base de datos externa (PostgreSQL)
+database:
+  host: "postgres-postgresql.default.svc.cluster.local"
+  port: 5432
+  name: "kinara"
+  user: "kinara"
+  existingSecret: "kinara-db-secret"
+
+# Almacenamiento CAS (S3 / Garage / MinIO / AWS)
+storage:
+  s3:
+    endpoint: "http://garage-s3.default.svc.cluster.local:3900"
+    region: "garage"
+    bucket: "kinara-cas"
+    existingSecret: "kinara-s3-secret"
+
+resources:
+  limits:
+    cpu: 2000m
+    memory: 2Gi
+  requests:
+    cpu: 200m
+    memory: 256Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
