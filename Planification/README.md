@@ -20,6 +20,7 @@ Los documentos se encuentran organizados de forma secuencial y modular para guia
 | **06** | [`06-modelo-datos-y-esquema-db.md`](file:///home/cesar/Projects/Kinara-Registry/Planification/06-modelo-datos-y-esquema-db.md) | Esquema relacional completo (PostgreSQL/SQLite), tablas de metadatos, deduplicación y uso estratégico de columnas `JSONB`. |
 | **07** | [`07-seguridad-autenticacion-y-acl.md`](file:///home/cesar/Projects/Kinara-Registry/Planification/07-seguridad-autenticacion-y-acl.md) | Modelo de identidad, tokens PAT/JWT, endpoints OCI, matriz de permisos y control de acceso granular (*ACL*). |
 | **08** | [`08-roadmap-y-fases-desarrollo.md`](file:///home/cesar/Projects/Kinara-Registry/Planification/08-roadmap-y-fases-desarrollo.md) | Hoja de ruta de ingeniería en 4 fases, hitos de entrega, criterios de aceptación técnica y checklist de definición de terminado (*DoD*). |
+| **09** | [`09-investigacion-aplicaciones-y-stack-tecnologico.md`](file:///home/cesar/Projects/Kinara-Registry/Planification/09-investigacion-aplicaciones-y-stack-tecnologico.md) | Análisis de arquitectura de aplicaciones, desacoplamiento (Control Plane, Data Plane, Workers, UI, CLI) y comparativa de lenguajes (Go, Rust, React). |
 
 ---
 

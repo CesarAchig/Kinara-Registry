@@ -11,9 +11,9 @@ flowchart TD
     ProxyRepo["Repositorio Proxy (Remote)\nCaché de Upstream Público"]
     Upstream["Registro Público Externo\n(PyPI, Docker Hub, Crates.io, NuGet)"]
 
-    Virtual -->|1. Prioridad Alta (Local First)| LocalRepo
-    Virtual -->|2. Prioridad Secundaria| ProxyRepo
-    ProxyRepo -.->|Cache Miss: Fetch & Cache| Upstream
+    Virtual -->|"1. Prioridad Alta (Local First)"| LocalRepo
+    Virtual -->|"2. Prioridad Secundaria"| ProxyRepo
+    ProxyRepo -.->|"Cache Miss: Fetch & Cache"| Upstream
 ```
 
 ---
