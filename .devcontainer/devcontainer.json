@@ -1,0 +1,108 @@
+{
+  "name": "Kinara Registry (Go + Bun/React + Postgres + Garage S3)",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "app",
+  "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+
+  // Puertos expuestos para desarrollo
+  // 8080: API / Registry Server
+  // 5173: Vite Dev Server (React 19 UI)
+  // 5432: PostgreSQL Database
+  // 3900: Garage S3 API (Almacenamiento CAS local)
+  // 3903: Garage Admin API
+  "forwardPorts": [8080, 5173, 5432, 3900, 3903],
+  "portsAttributes": {
+    "8080": {
+      "label": "Kinara Backend API",
+      "onAutoForward": "notify"
+    },
+    "5173": {
+      "label": "Kinara UI (Vite + React)",
+      "onAutoForward": "openBrowser"
+    },
+    "5432": {
+      "label": "PostgreSQL Database",
+      "onAutoForward": "silent"
+    },
+    "3900": {
+      "label": "Garage S3 API",
+      "onAutoForward": "silent"
+    },
+    "3903": {
+      "label": "Garage Admin API",
+      "onAutoForward": "silent"
+    }
+  },
+
+  // Personalización del IDE (VS Code) dentro del contenedor
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        // Backend Go
+        "golang.go",
+
+        // Frontend React 19 + TypeScript + Bun + Tailwind
+        "oven.bun-vscode",
+        "bradlc.vscode-tailwindcss",
+        "esbenp.prettier-vscode",
+        "dbaeumer.vscode-eslint",
+        "dsznajder.es7-react-js-snippets",
+
+        // Base de Datos & Pruebas de API
+        "cweijan.vscode-postgresql-client2",
+        "humao.rest-client",
+
+        // DevOps & Archivos de Configuración
+        "ms-azuretools.vscode-docker",
+        "tamasfe.even-better-toml",
+        "redhat.vscode-yaml"
+      ],
+      "settings": {
+        // Formateo automático de código al guardar
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+          "source.organizeImports": "always"
+        },
+
+        // Configuración específica para Go
+        "[go]": {
+          "editor.defaultFormatter": "golang.go",
+          "editor.formatOnSave": true
+        },
+        "go.lintTool": "golangci-lint",
+        "go.lintOnSave": "package",
+        "go.useLanguageServer": true,
+
+        // Configuración específica para TypeScript y React
+        "[typescript]": {
+          "editor.defaultFormatter": "esbenp.prettier-vscode"
+        },
+        "[typescriptreact]": {
+          "editor.defaultFormatter": "esbenp.prettier-vscode"
+        },
+        "[json]": {
+          "editor.defaultFormatter": "esbenp.prettier-vscode"
+        },
+        "[jsonc]": {
+          "editor.defaultFormatter": "esbenp.prettier-vscode"
+        },
+
+        // Autocompletado de Tailwind CSS para utilidades clsx, cva y cn (shadcn/ui y Tremor)
+        "tailwindCSS.includeLanguages": {
+          "typescript": "javascript",
+          "typescriptreact": "html"
+        },
+        "tailwindCSS.experimental.classRegex": [
+          ["cva\\(([^)]*)\\)", "[\"'`]([^\"'`]*).*?[\"'`]"],
+          ["cn\\(([^)]*)\\)", "[\"'`]([^\"'`]*).*?[\"'`]"]
+        ]
+      }
+    }
+  },
+
+  // Comando de inicialización al crear el contenedor
+  "postCreateCommand": "echo '🚀 Kinara Dev Container listo (Go + Bun + Postgres + Garage S3)!' && go version && bun --version",
+
+  // Usuario no root por seguridad
+  "remoteUser": "vscode"
+}

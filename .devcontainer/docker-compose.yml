@@ -1,0 +1,47 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+
+    # Monta únicamente la carpeta del proyecto actual (evita ensuciar el directorio padre)
+    volumes:
+      - ..:/workspaces/Kinara-Registry:cached
+
+    # Mantiene el contenedor en ejecución
+    command: sleep infinity
+
+    # Comparte la red con db para que todo se comunique en localhost sin abrir puertos extra
+    network_mode: service:db
+
+  db:
+    image: postgres:latest
+    restart: unless-stopped
+
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+    # Datos 100% efímeros: NO se crean volúmenes persistentes en el host.
+    # Solo se monta el script SQL de inicialización en modo lectura.
+    volumes:
+      - ./init-db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    env_file:
+      - .env
+
+  # Garage S3 (Almacenamiento de objetos en Rust)
+  # También 100% efímero: al destruir el contenedor, los blobs de prueba desaparecen
+  garage:
+    image: dxflrs/garage:v1.0.1
+    restart: unless-stopped
+    command: /garage server --single-node --default-bucket
+    volumes:
+      - ./garage.toml:/etc/garage.toml:ro
+    env_file:
+      - .env
+    network_mode: service:db

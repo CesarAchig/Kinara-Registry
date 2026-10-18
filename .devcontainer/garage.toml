@@ -1,0 +1,23 @@
+# Configuración de Garage S3 para entorno de desarrollo (Single-Node)
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+db_engine = "sqlite"
+
+# Factor de replicación 1 para despliegues locales / desarrollo
+replication_factor = 1
+
+# Secreto RPC interno para el nodo Garage
+rpc_secret = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+rpc_bind_addr = "[::]:3901"
+rpc_public_addr = "127.0.0.1:3901"
+
+# Endpoint de la API de S3
+[s3_api]
+api_bind_addr = "[::]:3900"
+s3_region = "garage"
+root_domain = ".s3.garage"
+
+# API de Administración de Garage
+[admin]
+api_bind_addr = "[::]:3903"
+admin_token = "kinara_garage_admin_token_secret_123"
