@@ -25,9 +25,9 @@ Toda la documentación técnica, decisiones de diseño, modelos matemáticos, es
 * [`Planification/README.md`](./Planification/README.md) — Índice general y mapa de componentes.
 * [`Planification/01-vision-y-alcance.md`](./Planification/01-vision-y-alcance.md) — Visión, pilares y ecosistemas del MVP.
 * [`Planification/02-arquitectura-del-sistema.md`](./Planification/02-arquitectura-del-sistema.md) — Separación entre Plano de Control y Plano de Datos.
-* [`Planification/03-estrategia-almacenamiento-cas.md`](./Planification/03-estrategia-almacenamiento-cas.md) — Almacenamiento CAS y arquitectura Multi-Tier.
+* [`Planification/03-estrategia-almacenamiento-cas.md`](./Planification/03-estrategia-almacenamiento-cas.md) — Almacenamiento CAS de fichero completo, autorización por repositorio y jerarquía de almacenamiento (FS/S3 + Hot Tier NVMe).
 * [`Planification/04-tipos-de-repositorios.md`](./Planification/04-tipos-de-repositorios.md) — Repositorios Locales, Proxy, Virtuales y mitigación de Dependency Confusion.
-* [`Planification/05-algoritmos-y-optimizaciones.md`](./Planification/05-algoritmos-y-optimizaciones.md) — Algoritmos clave: FastCDC, evicción GDSF, Filtros de Bloom y Zero-Downtime GC.
+* [`Planification/05-algoritmos-y-optimizaciones.md`](./Planification/05-algoritmos-y-optimizaciones.md) — Algoritmos clave: deduplicación CAS, evicción GDSF en Hot Tier, Inflight Coalescing sobre staging y Zero-Downtime GC con leases.
 * [`Planification/06-modelo-datos-y-esquema-db.md`](./Planification/06-modelo-datos-y-esquema-db.md) — Esquema de base de datos relacional y metadatos JSONB.
 * [`Planification/07-seguridad-autenticacion-y-acl.md`](./Planification/07-seguridad-autenticacion-y-acl.md) — Modelo de seguridad, tokens PAT/JWT y control de acceso granular (ACL).
 * [`Planification/08-roadmap-y-fases-desarrollo.md`](./Planification/08-roadmap-y-fases-desarrollo.md) — Fases de implementación e hitos de ingeniería.

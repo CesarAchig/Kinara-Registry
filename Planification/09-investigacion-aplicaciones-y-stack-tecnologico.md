@@ -8,7 +8,7 @@ La premisa inicial del proyecto planteaba una arquitectura clásica de dos compo
 1. **Un Backend monolítico (API):** Encargado de la lógica de negocio, enrutamiento de protocolos, procesamiento de datos pesados y tareas en segundo plano.
 2. **Un Frontend (Dashboard Web UI):** Encargado de la visualización del registro, exploración de paquetes y configuración del desarrollador.
 
-Tras contrastar esta idea con los requisitos definidos en los documentos previos —especialmente la **Separación de Planos** ([`02-arquitectura-del-sistema.md`](file:///home/cesar/Projects/Kinara-Registry/Planification/02-arquitectura-del-sistema.md)), la deduplicación por bloques **FastCDC** y el recolector **Zero-Downtime GC** ([`05-algoritmos-y-optimizaciones.md`](file:///home/cesar/Projects/Kinara-Registry/Planification/05-algoritmos-y-optimizaciones.md)) y los pilares de **Despliegue Zero-Config** y **Baja Huella de Recursos** ([`01-vision-y-alcance.md`](file:///home/cesar/Projects/Kinara-Registry/Planification/01-vision-y-alcance.md))—, se concluye que:
+Tras contrastar esta idea con los requisitos definidos en los documentos previos —especialmente la **Separación de Planos** ([`02-arquitectura-del-sistema.md`](file:///home/cesar/Projects/Kinara-Registry/Planification/02-arquitectura-del-sistema.md)), el almacenamiento **CAS de fichero completo**, el *coalescing* sobre fichero de staging y el recolector **Zero-Downtime GC con leases** ([`05-algoritmos-y-optimizaciones.md`](file:///home/cesar/Projects/Kinara-Registry/Planification/05-algoritmos-y-optimizaciones.md)) y los pilares de **Despliegue Zero-Config** y **Baja Huella de Recursos** ([`01-vision-y-alcance.md`](file:///home/cesar/Projects/Kinara-Registry/Planification/01-vision-y-alcance.md))—, se concluye que:
 
 > [!IMPORTANT]
 > Un monolito estricto de una sola aplicación backend corre el riesgo de degradar la experiencia de usuario y la estabilidad operativa al mezclar transferencia de datos masiva (*streaming I/O* de gigabytes) con la API transaccional de metadatos y tareas pesadas de mantenimiento en segundo plano. No obstante, fragmentar el sistema prematuramente en múltiples microservicios independientes destruiría el pilar de **Despliegue Zero-Config** (`docker compose up -d`).
@@ -31,17 +31,17 @@ flowchart TB
     subgraph EnfoqueB["Opción B: Desacoplamiento Multi-Rol (Recomendado)"]
         direction TB
         UI2["1. Kinara Dashboard (SPA)"]
-        CLI2["2. Kinara CLI (Dev & Ops)"]
+        CLI2["2. Kinara CLI (kinara-cli)"]
         
         subgraph CorePlatform["Plataforma Core (Binario Unificado o Roles Segregados)"]
             Control2["Rol: Control Plane & Gateway API"]
-            Data2["Rol: Data Plane Engine (FastCDC / CAS)"]
-            Worker2["Rol: Background Worker (GC / GDSF / Scanner)"]
+            Data2["Rol: Data Plane Engine (Streaming / CAS / Hot Tier)"]
+            Worker2["Rol: Background Worker (GC / Retención / Integridad)"]
         end
         
         UI2 --> Control2
         CLI2 --> Control2
-        Control2 <--> Data2
+        Control2 <-->|"Interfaz DataPlane"| Data2
         Worker2 -.-> Data2
     end
 ```
@@ -50,8 +50,8 @@ flowchart TB
 
 | Ventajas del Modelo Bi-Aplicación | Riesgos y Limitaciones Técnicas |
 | :--- | :--- |
-| **Simplicidad de despliegue:** Un único contenedor backend y un contenedor/servidor web para la UI (o incluso la UI embebida dentro del backend). | **Problema del "Vecino Ruidoso" (*Noisy Neighbor*):** El cálculo de hashes SHA-256 o el chunking FastCDC de una imagen Docker de $4\text{ GB}$ compite por ciclos de CPU con las consultas de autenticación y navegación de la UI. |
-| **Menor sobrecarga de CI/CD:** Solo dos pipelines de construcción y dos imágenes de contenedor que versionar. | **Incompatibilidad de escalado:** El Plano de Control (ligero, sensible a latencia) escala horizontalmente por peticiones HTTP/s, mientras que el Plano de Datos escala por throughput de red y memoria de buffers. |
+| **Simplicidad de despliegue:** Un único contenedor backend y un contenedor/servidor web para la UI (o incluso la UI embebida dentro del backend). | **Problema del "Vecino Ruidoso" (*Noisy Neighbor*):** El cálculo de hashes SHA-256 en streaming y la extracción de metadatos de una imagen Docker de $4\text{ GB}$ compiten por ciclos de CPU e I/O con las consultas de autenticación y navegación de la UI. |
+| **Menor sobrecarga de CI/CD:** Solo dos pipelines de construcción y dos imágenes de contenedor que versionar. | **Incompatibilidad de escalado:** El Plano de Control (ligero, sensible a latencia) escala horizontalmente por peticiones HTTP/s, mientras que el Plano de Datos escala por throughput de red y discos NVMe locales. |
 | **Desarrollo inicial acelerado:** Menor cantidad de repositorios, contratos de red internos o mecanismos de coordinación entre procesos. | **Riesgo de bloqueo en el ciclo de vida:** Tareas como el *Garbage Collection (Sweep)* de miles de blobs pueden degradar el pool de conexiones de la base de datos compartido con el API público. |
 
 ---
@@ -61,16 +61,16 @@ flowchart TB
 Identificamos **tres componentes candidatos naturales** para ser desacoplados como aplicaciones o procesos independientes:
 
 #### 1. Kinara Worker (Daemon de Tareas Asíncronas)
-* **Responsabilidades:** Ejecución del ciclo de *Mark-and-Sweep* (GC) con período de gracia de 24h, evicción de caché local GDSF, auditoría asíncrona y verificación de integridad criptográfica periódica.
-* **Por qué desacoplarlo:** Las operaciones de mantenimiento son intensivas en disco y CPU, pero tolerantes a latencia. En entornos Kubernetes o clústeres de producción, deben correr como un `CronJob` o un `Deployment` independiente con límites de recursos (*resource limits*) estrictos para no restar capacidad al tráfico de usuarios.
+* **Responsabilidades:** Ejecución del ciclo de *Mark-and-Sweep* (GC) con *leases* (`last_referenced_at`) y período de gracia de 24h, limpieza de sesiones de subida caducadas, políticas de retención/cuotas de cachés proxy y verificación periódica de integridad criptográfica SHA-256, coordinados mediante elección de líder (*advisory lock* en PostgreSQL).
+* **Por qué desacoplarlo:** Las operaciones de mantenimiento son intensivas en I/O, pero tolerantes a latencia. En entornos Kubernetes o clústeres de producción, corren como un `Deployment` independiente con elección de líder y límites de recursos (*resource limits*) estrictos para no restar capacidad al tráfico de usuarios.
 
 #### 2. Kinara Storage / Data Plane (Motor de Streaming y CAS)
-* **Responsabilidades:** Recepción de bytes en staging, particionamiento FastCDC con ventana deslizante de Gear, compresión adaptativa `zstd:chunked` y conexión directa con almacenamiento S3/MinIO.
-* **Por qué desacoplarlo:** Permite aislar los buffers de memoria de red y los procesos intensivos de streaming I/O. En despliegues distribuidos de alto volumen, múltiples nodos de Data Plane pueden situarse cerca del almacenamiento físico o en zonas de disponibilidad específicas.
+* **Responsabilidades:** Recepción de bytes en staging (sistema de ficheros local o S3 Multipart Upload), cálculo y verificación reanudable de SHA-256 en streaming, extracción de metadatos declarativos al vuelo, caché local opcional **Hot Tier** en NVMe (gestionada en el propio nodo mediante GDSF) y conexión con almacenamiento S3-compatible (AWS S3, Cloudflare R2, Garage, MinIO, SeaweedFS).
+* **Por qué desacoplarlo:** Permite aislar los buffers de red y los procesos intensivos de streaming I/O detrás de la interfaz interna `DataPlane`. En despliegues distribuidos de alto volumen, múltiples nodos de Data Plane pueden situarse en nodos con discos NVMe dedicados o cerca del almacenamiento de objetos.
 
-#### 3. Kinara CLI (`kinara`)
-* **Responsabilidades:** Autenticación rápida desde terminal, configuración automática de entornos de desarrollo (`kinara setup npm|pypi|docker`), inspección forense de blobs, migración de repositorios y operaciones administrativas de emergencia fuera del navegador.
-* **Por qué desacoplarlo:** Aporta una experiencia de desarrollador de primer nivel (*DX First*), convirtiéndose en la herramienta favorita de pipelines CI/CD y DevOps sin depender de una interfaz gráfica.
+#### 3. Kinara CLI (`kinara-cli`)
+* **Responsabilidades:** Autenticación rápida desde terminal, configuración automática de entornos de desarrollo (`kinara-cli setup [pypi|docker|cargo|nuget|go]`), publicación de módulos Go internos (`kinara-cli go publish`), gestión de repositorios/PATs y operaciones administrativas fuera del navegador.
+* **Por qué desacoplarlo:** Aporta una experiencia de desarrollador de primer nivel (*DX First*), convirtiéndose en la herramienta de referencia para pipelines CI/CD y DevOps sin depender de una interfaz gráfica.
 
 ---
 
@@ -78,12 +78,12 @@ Identificamos **tres componentes candidatos naturales** para ser desacoplados co
 
 Para no renunciar al pilar **Zero-Config** (`docker compose up -d` inmediato) ni a la **Escalabilidad Cloud-Native**, la mejor decisión de arquitectura es adoptar el patrón **Single-Binary Multi-Role**:
 
-* **Un único repositorio de código (*Monorepo*):** Todo el backend se construye como una unidad limpia y modular.
-* **Un único ejecutable compilado:** El binario resultante puede ejecutarse en distintos modos mediante comandos o variables de entorno:
-  * `kinara server --mode=all` (Por defecto: arranca Control Plane, Data Plane y Workers embebidos; ideal para local, edge y CI efímero).
-  * `kinara server --mode=api` (Solo Control Plane, API REST y Gateway OCI).
-  * `kinara server --mode=storage` (Solo Data Plane de alto rendimiento I/O).
-  * `kinara worker` (Solo el daemon de GC, escaneo y evicción GDSF).
+* **Un único repositorio de código (*Monorepo*):** Todo el backend se construye como una unidad limpia y modular alrededor de la interfaz interna `DataPlane`.
+* **Un único ejecutable de servidor (`kinara`):** El binario resultante puede ejecutarse en distintos modos mediante banderas o variables de entorno:
+  * `kinara server --mode=all` (Por defecto: arranca Control Plane, Data Plane y Workers en el mismo proceso; ideal para desarrollo local, edge y CI efímero; en SQLite opera siempre con 1 réplica).
+  * `kinara server --mode=api` (Solo Control Plane, API REST y Gateway de protocolos; requiere PostgreSQL).
+  * `kinara server --mode=storage` (Solo Data Plane de alto rendimiento I/O y Hot Tier NVMe).
+  * `kinara worker` (Solo el daemon de GC con *leases*, retención y verificador de integridad con elección de líder).
 * **Frontend SPA independiente:** Se desarrolla y prueba de forma aislada, pero en producción sus artefactos estáticos pueden **embebérsele al binario del backend** o servirse mediante un Ingress/Nginx.
 
 ---
@@ -116,9 +116,9 @@ quadrantChart
 | **Huella de Memoria Base** | 🟢 **Ultra-baja** (15 - 30 MB en reposo) | 🟢 **Mínima** (5 - 15 MB en reposo) | 🟡 **Media** (40 - 90 MB con AOT) | 🔴 **Alta** (80 - 150 MB en reposo) |
 | **Rendimiento I/O y Streaming** | 🟢 **Excelente:** Abstracciones `io.Reader/Writer`, `io.Pipe`, `io.TeeReader` nativas y zero-copy. | 🟢 **Insuperable:** Control de memoria manual, procesamiento asíncrono con `tokio` sin pausas GC. | 🟡 **Bueno:** `System.IO.Pipelines` de alto rendimiento, pero mayor complejidad de tuning. | 🔴 **Deficiente:** El event loop se satura al procesar flujos continuos de gigabytes y hashing simultáneo. |
 | **Ecosistema OCI & Contenedores** | 🟢 **Estándar de la Industria:** Docker, Kubernetes, containerd, Harbor y Skopeo están en Go. Librerías OCI oficiales disponibles. | 🟡 **Emergente:** Existen crates como `oci-distribution`, pero requieren construir gran parte del protocolo a mano. | 🔴 **Muy limitado:** Prácticamente inexistente; requiere implementar la especificación OCI desde cero. | 🟡 **Moderado:** Existen paquetes comunitarios, pero con bajo mantenimiento para especificaciones modernas. |
-| **Implementación FastCDC & Bitwise** | 🟢 **Muy Rápida:** Operaciones a nivel de bit eficientes; throughput de >900 MB/s con `sync.Pool`. | 🟢 **Extrema:** Throughput de 2.5 - 4 GB/s aprovechando vectorización SIMD nativa. | 🟡 **Buena:** `Span<T>` y `Memory<T>` permiten alto throughput si se optimiza a bajo nivel. | 🔴 **Inadecuada:** Los tipos numéricos de JS y el paso por V8 penalizan severamente el cálculo intensivo de hashes. |
+| **Hashing SHA-256 & Operaciones Bitwise** | 🟢 **Muy Rápida:** Aceleración SHA-NI nativa en `crypto/sha256` (>1 GB/s por núcleo) y estado serializable (`BinaryMarshaler`). | 🟢 **Extrema:** Throughput de 2.5 - 4 GB/s aprovechando vectorización SIMD nativa. | 🟡 **Buena:** `Span<T>` y `Memory<T>` permiten alto throughput si se optimiza a bajo nivel. | 🔴 **Inadecuada:** Los tipos numéricos de JS y el paso por V8 penalizan el procesamiento continuo. |
 | **Concurrencia Nativa** | 🟢 **Goroutines & Canales:** Patrones de concurrencia como `singleflight` (`golang.org/x/sync/singleflight`) incluidos en el ecosistema. | 🟢 **Fearless Concurrency:** Garantías estrictas de ausencia de data races en tiempo de compilación. | 🟡 **Async/Await con ThreadPool:** Robusto, pero más pesado en consumo de memoria por hilo. | 🔴 **Single-Threaded:** Depende de `worker_threads` pesados para tareas de cómputo intensivo. |
-| **Tiempo de Compilación y DX** | 🟢 **Instantáneo:** Compilación en segundos, binario estático autocontenido sin dependencias externas. | 🔴 **Lento:** Tiempos de compilación largos con macros complejas; curva de aprendizaje pronunciada. | 🟡 **Moderado:** Compilación cruzada buena, pero Native AOT añade minutos al build. | 🟢 **Rápido:** No requiere compilación tradicional (JIT / esbuild / SWC). |
+| **Tiempo de Compilación y DX** | 🟢 **Instantáneo:** Compilación en segundos, binario estático autocontenido sin dependencias externas (`CGO_ENABLED=0`). | 🔴 **Lento:** Tiempos de compilación largos con macros complejas; curva de aprendizaje pronunciada. | 🟡 **Moderado:** Compilación cruzada buena, pero Native AOT añade minutos al build. | 🟢 **Rápido:** No requiere compilación tradicional (JIT / esbuild / SWC). |
 
 ---
 
@@ -127,9 +127,9 @@ quadrantChart
 > [!TIP]
 > **Recomendación Definitiva para el Backend:** **Go (Golang)** es la elección óptima para el Core de Kinara Registry.
 > 
-> * **Justificación Estratégica:** Go es el lenguaje vehicular de todo el ecosistema nativo de la nube. Adoptar Go permite reutilizar directamente los paquetes canónicos de la Open Container Initiative (`github.com/opencontainers/image-spec`, `distribution/distribution`), reduciendo meses de ingeniería inversa en la especificación OCI.
-> * **Justificación de Concurrencia:** La biblioteca estándar de Go (`io.TeeReader`, `io.MultiWriter`, `sync.Pool`) y extensiones oficiales como `singleflight` resuelven de forma natural y con escasas líneas de código el **Cut-Through Streaming** y la **Supresión de Estampidas** planificados en el [`05-algoritmos-y-optimizaciones.md`](file:///home/cesar/Projects/Kinara-Registry/Planification/05-algoritmos-y-optimizaciones.md).
-> * **Alternativa en Módulos Críticos:** Si en fases posteriores el particionamiento FastCDC requiere rendimiento extremo en clusters con hardware específico, dicho algoritmo puede encapsularse en una pequeña librería en **Rust** compilada mediante CGO / C-ABI o WebAssembly, manteniendo el resto del sistema en Go puro.
+> * **Justificación Estratégica:** Go es el lenguaje vehicular de todo el ecosistema nativo de la nube. Adoptar Go permite reutilizar directamente los paquetes canónicos de la Open Container Initiative (`github.com/opencontainers/image-spec`), reduciendo meses de ingeniería en los protocolos de contenedores.
+> * **Justificación de Concurrencia y Streaming:** La biblioteca estándar de Go (`io.Reader`, `io.SectionReader`, `sync.Pool`, `crypto/sha256` con estado serializable) junto con `singleflight` (para metadatos) y el **Inflight Registry sobre fichero de staging** (para binarios) permiten implementar de forma limpia el **Cut-Through Verificado** y la **Supresión de Estampidas** descritos en [`05-algoritmos-y-optimizaciones.md`](file:///home/cesar/Projects/Kinara-Registry/Planification/05-algoritmos-y-optimizaciones.md).
+> * **Preservación del Binario Estático (`CGO_ENABLED=0`):** Tanto el driver de SQLite (`modernc.org/sqlite`) como el resto del stack se eligen en Go puro para no requerir `libc` ni CGO. Si en el futuro un módulo experimental necesitase código externo en Rust, se integraría como módulo WebAssembly mediante **`wazero`** (runtime Wasm en Go puro sin CGO) o como proceso sidecar, nunca rompiendo la compilación estática.
 
 ---
 
@@ -150,13 +150,13 @@ flowchart TD
     end
 
     subgraph ReactiveOptions["3. Framework de UI en Cliente"]
-        React["Opción A: React 19 + shadcn/ui\n(Máximo ecosistema y componentes de dashboard)"]
-        Svelte["Opción B: Svelte 5 (Runes)\n(Máximo rendimiento y bundle ultra-ligero para Go embed)"]
+        React["Opción Adoptada: React 19 + shadcn/ui\n(Máximo ecosistema y componentes de dashboard)"]
+        Svelte["Alternativa Evaluada: Svelte 5 (Runes)\n(Bundle ultra-ligero para dispositivos edge)"]
     end
 
     Approved --> Bun
     Bun --> React
-    Bun --> Svelte
+    Bun -.-> Svelte
 ```
 
 ---
@@ -170,10 +170,10 @@ Se entiende por **web estática pura** un sitio web compuesto exclusivamente de 
 
 Un registro de artefactos empresarial no es un sitio de documentación ni un blog informativo; es una **consola de operaciones de misión crítica** que requiere alta interactividad en los siguientes flujos funcionales:
 
-1. **Generador Interactivo "Set Me Up":** No se limita a mostrar bloques de texto fijos. El usuario selecciona su sistema operativo (Linux, macOS, Windows), el formato deseado (Docker, pip, Cargo, NuGet, Go) y el repositorio (local, proxy o virtual). La interfaz debe generar en tiempo real los fragmentos de configuración (`.npmrc`, `pip.conf`, `nuget.config`), inyectando las URLs canónicas y tokens de sesión de un solo clic con botón de copiado al portapapeles.
+1. **Generador Interactivo "Set Me Up":** No se limita a mostrar bloques de texto fijos. El usuario selecciona su sistema operativo (Linux, macOS, Windows), el formato deseado (Docker, pip, Cargo, NuGet, Go) y el repositorio (local, proxy o virtual). La interfaz debe generar en tiempo real los fragmentos de configuración (`pip.conf`, `.docker/config.json`, `nuget.config`, `.cargo/config.toml`, `GOPROXY`/`.netrc`), inyectando las URLs canónicas y tokens de sesión de un solo clic con botón de copiado al portapapeles.
 2. **Explorador y Búsqueda Facetada en Tiempo Real:** En repositorios con miles de versiones, capas OCI y metadatos de dependencias, recargar la página completa en cada filtrado destruye la experiencia de desarrollo (DX). Se requiere filtrado instantáneo en cliente y paginación virtualizada.
-3. **Telemetría y Métricas en Vivo:** El dashboard debe reflejar el estado del almacenamiento en tiempo real: ratio de deduplicación FastCDC (ahorro en GB), latencia de proxies remotos, tasa de aciertos de caché (*cache hit ratio*) y barras de progreso activas durante el recolector de basura (*GC Mark & Sweep*). Esto exige conexión continua (SSE o WebSockets) y renderizado reactivo de gráficos.
-4. **Gestión de Repositorios Virtuales (Drag & Drop):** Los repositorios virtuales agrupan repositorios locales y remotos con un orden de precedencia estricto para mitigar ataques de *Dependency Confusion* ([`04-tipos-de-repositorios.md`](file:///home/cesar/Projects/Kinara-Registry/Planification/04-tipos-de-repositorios.md)). Reordenar esta jerarquía exige componentes visuales interactivos de arrastrar y soltar.
+3. **Telemetría y Métricas en Vivo:** El dashboard debe reflejar el estado del almacenamiento en tiempo real: ratio de deduplicación CAS (ahorro en GB), latencia de proxies remotos, tasa de aciertos de caché (*cache hit ratio*) y estado del recolector de basura (*GC Mark & Sweep*). Esto exige actualización continua y renderizado reactivo de gráficos.
+4. **Gestión de Repositorios Virtuales (Drag & Drop):** Los repositorios virtuales agrupan repositorios locales y remotos con un orden de precedencia estricto para mitigar ataques de *Dependency Confusion* ([`04-tipos-de-repositorios.md`](file:///home/cesar/Projects/Kinara-Registry/Planification/04-tipos-de-repositorios.md)). Reordenar esta jerarquía (`virtual_repo_members.priority`) exige componentes visuales interactivos de arrastrar y soltar.
 5. **Control de Acceso Granular (ACL) y Tokens PAT:** Creación interactiva de tokens de acceso personal con selección dinámica de alcances (*scopes*), cálculo de expiración al vuelo y visualización de matrices de permisos por repositorio.
 
 Por tanto, Kinara Registry requiere imperativamente un **entorno reactivo con gestión de estado en el cliente**.
@@ -284,41 +284,38 @@ Independientemente del framework reactivo elegido, la UI se empaqueta bajo una e
    * El binario resultante contiene en su sección de datos los archivos de la UI. Cuando un usuario accede a `http://localhost:8080/`, el router en Go sirve los archivos estáticos con encabezados de caché `Cache-Control: public, max-age=31536000` y resuelve las rutas SPA devolviendo `index.html` ante peticiones no reconocidas.
 2. **Modo Desacoplado (Clústeres Kubernetes de Alto Tráfico):**
    * La UI se construye como una imagen Docker basada en `nginx:alpine` de solo $15\text{ MB}$.
-   * El tráfico de la UI se gestiona en el Ingress de Kubernetes, enrutando `/api/` y `/v2/` hacia los pods de `kinara-core` y la raíz `/` hacia el pod de Nginx o un bucket S3/Cloudflare Pages.
+   * El tráfico se gestiona en el Ingress de Kubernetes, enrutando `/api/`, `/v2/`, `/pypi/`, `/nuget/`, `/go/` y `/cargo/` hacia los pods de `kinara-core` y la raíz `/` hacia el pod de Nginx o servidor de estáticos.
 
 ---
 
-### 4.6. Veredicto y Recomendaciones Definitivas para la UI
+### 4.6. Decisión Adoptada y Alternativa Evaluada para la UI
 
-A partir de la investigación exhaustiva, se formulan **dos escenarios de recomendación claros**:
-
-#### Escenario 1: Elección Primaria (Enfoque Empresarial y Rápido Time-to-Market)
-> **Stack: React 19 + TypeScript + Vite + Tailwind CSS + shadcn/ui + Tremor (Gestionado con Bun)**
+#### Decisión Adoptada en el Repositorio (`web/`)
+> **Stack: React 19 + TypeScript + Vite + Tailwind CSS + shadcn/ui (Gestionado con Bun)**
 > 
-> * **Por qué:** Kinara Registry necesita un dashboard que transmita confianza y madurez técnica similar a GitHub Packages o Harbor. La disponibilidad de `shadcn/ui` y librerías de visualización de métricas de infraestructura como `Tremor` permite construir en días tablas de auditoría virtualizadas, exploradores de capas Docker y gráficos de deduplicación con acabado profesional.
-> * **El rol de Bun:** Se utiliza **Bun** como gestor de paquetes exclusivo (`bun install`) y ejecutor de scripts en el monorepo, reduciendo los tiempos de CI/CD a segundos.
+> * **Por qué:** Kinara Registry necesita un dashboard que transmita confianza y madurez técnica similar a GitHub Packages o Harbor. La disponibilidad de `shadcn/ui` y componentes de analítica permite construir tablas de auditoría virtualizadas, exploradores de capas OCI, reordenación *drag-and-drop* de repositorios virtuales y gráficos de deduplicación con acabado profesional y rápido *time-to-market*.
+> * **El rol de Bun:** Se utiliza **Bun** como gestor de paquetes exclusivo (`bun install`, con lockfile de texto `bun.lock`) y ejecutor de scripts en el monorepo, reduciendo los tiempos de CI/CD a segundos.
 
-#### Escenario 2: Elección Alternativa (Enfoque Hiper-Ligero y Minimalismo en Binario)
-> **Stack: Svelte 5 (Runes) + TypeScript + Vite + Tailwind CSS + shadcn-svelte (Gestionado con Bun)**
+#### Alternativa Evaluada (Descartada para v1.0, documentada como referencia)
+> **Stack: Svelte 5 (Runes) + TypeScript + Vite + Tailwind CSS + shadcn-svelte**
 > 
-> * **Por qué:** Si el equipo de ingeniería prioriza que el tamaño del binario compilado de Go sea lo más pequeño humanamente posible (por ejemplo, para despliegues en dispositivos *edge* o entornos con almacenamiento muy restringido), Svelte 5 genera un bundle de apenas $30 - 40\text{ KB}$ sin sacrificar reactividad moderna ni desacoplamiento de API.
-
+> * **Trade-off:** Svelte 5 genera un bundle de apenas $30 - 60\text{ KB}$, pero cuenta con un ecosistema más reducido de componentes de dashboard empresariales listos para usar. El sobrecoste de $\sim 100\text{ KB}$ de React 19 embebido en un binario Go de decenas de megabytes es despreciable frente a la ganancia en velocidad de desarrollo.
 
 ---
 
-## 5. Herramienta de Línea de Comandos: Kinara CLI (`kinara`)
+## 5. Herramienta de Línea de Comandos: Kinara CLI (`kinara-cli`)
 
-Para elevar la experiencia de desarrollo al nivel de herramientas modernas como `gh` (GitHub CLI) o `flyctl`:
+Para elevar la experiencia de desarrollo al nivel de herramientas modernas como `gh` (GitHub CLI) o `flyctl`, y evitar colisiones de nombre con el binario del servidor (`kinara`):
 
-* **Nombre de la Aplicación:** `kinara` (CLI independiente).
-* **Lenguaje:** **Go** (aprovechando los frameworks `spf13/cobra` y `spf13/viper`).
-* **Interfaz de Usuario de Terminal (TUI):** Utilización de `charmbracelet/bubbletea` y `lipgloss` para tablas, barras de progreso y asistentes interactivos visualmente atractivos.
+* **Nombre del Binario:** `kinara-cli` (compilado desde `./cmd/kinara-cli`).
+* **Lenguaje:** **Go** (aprovechando `spf13/cobra` y `spf13/viper`).
+* **Interfaz de Usuario de Terminal (TUI):** Utilización de `charmbracelet/bubbletea` y `lipgloss` para tablas, barras de progreso y asistentes interactivos.
 * **Comandos Principales:**
-  * `kinara login https://registry.empresa.com`: Autentica al desarrollador y guarda credenciales seguras en el almacén del sistema operativo (`keyring`).
-  * `kinara setup [pypi|docker|cargo|nuget|go]`: Detecta el proyecto local e inyecta la configuración del proxy/repositorio sin edición manual.
-  * `kinara repo list / create / delete`: Gestión de repositorios desde la consola.
-  * `kinara admin gc trigger`: Permite a los administradores forzar o consultar el estado del recolector de basura.
-  * `kinara admin stats`: Muestra estadísticas en tiempo real de deduplicación y ahorro en disco.
+  * `kinara-cli login https://registry.empresa.com`: Autentica al desarrollador y guarda el PAT en el almacén seguro del sistema operativo (`keyring`).
+  * `kinara-cli setup [pypi|docker|cargo|nuget|go]`: Genera o inyecta la configuración del repositorio virtual/local en el proyecto actual.
+  * `kinara-cli go publish`: Empaqueta y publica un módulo Go interno (`.zip`, `.mod`, `.info`) en un repositorio Go local de Kinara.
+  * `kinara-cli repo [list|create|delete]` y `kinara-cli pat [list|create|revoke]`: Administración desde la consola y pipelines CI/CD.
+  * `kinara-cli admin gc trigger` y `kinara-cli admin stats`: Ejecución bajo demanda del recolector de basura y consulta de métricas de ahorro en el CAS.
 
 ---
 
@@ -328,38 +325,46 @@ Para elevar la experiencia de desarrollo al nivel de herramientas modernas como 
 
 | Aplicación | Tipo / Rol | Lenguaje | Framework / Librerías Clave | Despliegue en Modo Simple | Despliegue en Modo Cloud-Native |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **`kinara-core`** | Backend API & Control Plane | **Go (Golang)** | `chi` / `fiber`, `pgx`, `modernc.org/sqlite`, `opencontainers/image-spec` | Embebido en binario unificado | `Deployment` de K8s con escalado horizontal (HPA) |
-| **`kinara-data`** | Data Plane & Motor CAS | **Go (Golang)** | `FastCDC`, `io.Pipe`, `aws-sdk-go-v2`, `klauspost/compress` (zstd) | Embebido en binario unificado | `Deployment` de K8s con afinidad de red y NVMe Hot Tier |
-| **`kinara-worker`** | Daemon Asíncrono de Mantenimiento | **Go (Golang)** | Motor de colas interno, GDSF Min-Heap, Mark-and-Sweep GC | Embebido en goroutine de fondo | `Deployment` independiente (1 réplica) o `CronJob` de K8s |
-| **`kinara-ui`** | Dashboard Web SPA | **TypeScript** | `React 19` (o `Svelte 5`), `Vite` impulsado por `Bun`, `Tailwind CSS`, `shadcn/ui`, `TanStack Query` | Embebido vía `//go:embed` en el binario Go | Pod Nginx independiente o servidor de estáticos |
-| **`kinara-cli`** | Herramienta CLI de Desarrollador | **Go (Golang)** | `cobra`, `viper`, `bubbletea`, `lipgloss` | Binario descargable | Binario distribuido vía Homebrew, Scoop, Go install o AUR |
+| **`kinara-core`** | Backend API & Control Plane | **Go (Golang)** | `chi` (`net/http` nativo, sin buffering de cuerpo), `pgx`, `modernc.org/sqlite`, `opencontainers/image-spec` | Embebido en binario `kinara` | `Deployment` de K8s con escalado horizontal (HPA) |
+| **`kinara-data`** | Data Plane & Motor CAS | **Go (Golang)** | `io.Pipe`, `io.SectionReader`, `crypto/sha256`, `aws-sdk-go-v2`, GDSF Min-Heap local | Embebido en binario `kinara` | `Deployment` de K8s con NVMe local (Hot Tier) |
+| **`kinara-worker`** | Daemon Asíncrono de Mantenimiento | **Go (Golang)** | Advisory Locks, Mark-and-Sweep GC con *leases*, retención de cachés proxy y verificador SHA-256 | Goroutines de fondo en `kinara` | `Deployment` independiente con elección de líder |
+| **`kinara-ui`** | Dashboard Web SPA | **TypeScript** | `React 19`, `Vite` impulsado por `Bun`, `Tailwind CSS`, `shadcn/ui`, `TanStack Query` | Embebido vía `//go:embed` en el binario `kinara` | Pod Nginx independiente o embebido en `kinara` |
+| **`kinara-cli`** | Herramienta CLI de Desarrollador | **Go (Golang)** | `cobra`, `viper`, `bubbletea`, `lipgloss` | Binario `kinara-cli` | Distribuido vía GitHub Releases, Homebrew, Scoop o `go install` |
+
+> [!NOTE]
+> Se elige **`go-chi/chi`** (sobre `net/http` estándar) y se descarta `Fiber` (`fasthttp`) porque `fasthttp` almacena por defecto los cuerpos de las peticiones en memoria antes de invocar al controlador, lo cual rompería el requisito de *streaming* con huella de RAM constante en subidas de varios gigabytes.
 
 ---
 
-### 6.2. Estructura de Repositorio Recomendada: Monorepo
+### 6.2. Estructura del Monorepo
 
-Para evitar la sobrecarga de sincronización de contratos API entre repositorios separados, se recomienda una estructura **Monorepo**:
+El repositorio implementa la siguiente estructura alineada con los planos y componentes definidos:
 
 ```text
-kinara/
+Kinara-Registry/
 ├── cmd/
-│   ├── kinara/             # Punto de entrada unificado (servidor multi-rol y CLI admin)
-│   └── kinara-cli/         # CLI independiente para clientes finales
+│   ├── kinara/             # Servidor multi-rol (--mode=all|api|storage y subcomando worker)
+│   └── kinara-cli/         # CLI independiente para desarrolladores y CI/CD
 ├── internal/
-│   ├── controlplane/       # Enrutamiento, Auth, ACL, Resolutores de Repositorios
-│   ├── dataplane/          # Streaming Cut-Through, FastCDC, CAS Storage Backend
-│   ├── worker/             # GC Mark & Sweep, Evicción GDSF, Indexadores
-│   ├── adapters/           # Adaptadores por ecosistema (OCI, PyPI, Cargo, Go, NuGet)
-│   └── database/           # Capa de datos dual (PostgreSQL / SQLite) y migraciones
-├── web/                    # Código fuente del Frontend SPA (React/Svelte + TypeScript + Vite)
+│   ├── config/             # Carga y validación de configuración
+│   ├── controlplane/       # Enrutador HTTP (chi), Auth, ACL, Resolutores de Repositorios
+│   ├── dataplane/          # Interfaz DataPlane, Inflight Coalescing, CAS (FS + S3) y Hot Tier GDSF
+│   ├── worker/             # GC con leases, retención/cuotas y verificador de integridad
+│   ├── adapters/           # Adaptadores por protocolo (oci, pypi, cargo, go, nuget)
+│   └── database/           # Capa de datos dual (PostgreSQL / SQLite)
+│       └── migrations/
+│           ├── postgres/   # Esquema DDL para PostgreSQL
+│           └── sqlite/     # Esquema DDL equivalente para SQLite WAL
+├── web/                    # Frontend SPA (React 19 + TypeScript + Vite)
 │   ├── src/
 │   ├── package.json
-│   ├── bun.lockb           # Gestión ultra-rápida de dependencias con Bun
+│   ├── bun.lock            # Lockfile de texto de Bun (Bun >= 1.2)
 │   └── vite.config.ts
 ├── deploy/
-│   ├── docker-compose/     # Configuración Zero-Config para desarrollo
-│   └── helm/               # Chart oficial para Kubernetes
-├── Makefile                # Automatización de builds (bun build + go build embed)
+│   ├── docker-compose/     # Configuración Zero-Config para desarrollo y modo simple
+│   └── helm/kinara/        # Chart oficial para Kubernetes
+├── Planification/          # Documentación arquitectónica y diseño técnico (01-09)
+├── Makefile                # Automatización de builds (bun + go build), tests y linters
 └── go.mod
 ```
 
@@ -367,10 +372,10 @@ kinara/
 
 ## 7. Conclusiones y Próximos Pasos
 
-1. **Validación de la Hipótesis del Usuario:** Mantener una separación conceptual entre Frontend y Backend es correcta y necesaria. Sin embargo, para evitar los cuellos de botella inherentes al streaming de gigabytes frente a metadatos ligeros, el Backend debe concebirse internamente como un sistema desacoplado (Control Plane, Data Plane y Workers), aunque empaquetado en un único binario para facilitar el despliegue.
-2. **Selección del Stack Tecnológico:** 
-   * **Backend, Streaming y CLI:** **Go (Golang)**, por ser el estándar de la industria OCI, su bajo consumo de memoria y sus primitivas nativas de streaming.
-   * **Frontend y Reactividad:** **SPA en cliente con React 19 + shadcn/ui** (para máxima riqueza y velocidad de entrega) o **Svelte 5** (si se prioriza minimizar al máximo los bytes embebidos en el binario Go). Una web puramente estática o server-side con HTMX queda descartada por las exigencias de telemetría en tiempo real y asistentes dinámicos.
-   * **Cadena de Herramientas UI:** Adopción de **Bun** en tiempo de desarrollo y CI/CD para instalaciones ultrarrápidas (`bun install` en ~2s) y ejecución nativa de scripts TypeScript, manteniendo **cero dependencias de Node/Bun en el servidor de producción** gracias a `//go:embed`.
-3. **Impacto en el Roadmap:** Esta arquitectura permite que la **Fase 1 del Roadmap** arranque con un solo comando sin lidiar con orquestaciones complejas de microservicios, dejando las puertas abiertas para desacoplar el Data Plane y los Workers en la **Fase 4** sin tener que reescribir una sola línea de código.
+1. **Validación de la Arquitectura Multi-Rol:** Mantener una separación clara entre Frontend y Backend es necesaria, y dentro del Backend el desacoplamiento entre Control Plane, Data Plane y Workers mediante la interfaz interna `DataPlane` (definida desde la Fase 1) evita que el streaming de binarios pesados degrade las consultas de metadatos, sin renunciar al despliegue en un único binario.
+2. **Selección Definitiva del Stack Tecnológico:**
+   * **Backend, Streaming y CLI:** **Go (Golang)** con `net/http` + `chi`, `pgx`, `modernc.org/sqlite` y `aws-sdk-go-v2`, compilado de forma estática (`CGO_ENABLED=0`).
+   * **Frontend y Reactividad:** **React 19 + TypeScript + Vite + Tailwind CSS + shadcn/ui**, consumiendo exclusivamente la API REST/JSON.
+   * **Cadena de Herramientas UI:** **Bun** en tiempo de desarrollo y CI/CD (`bun install` + `bun run build`), manteniendo **cero dependencias de Node/Bun en producción** gracias a `//go:embed`.
+3. **Impacto en el Roadmap:** Esta arquitectura permite que la **Fase 1** arranque con un único comando (`docker compose up -d`) soportando tanto disco local como S3, y que en la **Fase 4** los roles (`api`, `storage`, `worker`) escalen en despliegues separados de Kubernetes usando exactamente los mismos adaptadores y contratos internos.
 
